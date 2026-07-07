@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lokaler Mermaid Viewer (v11.7.0)</title>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.7.0/dist/mermaid.min.js"></script>
+    <title>Lokaler Mermaid Viewer (v11.16.0)</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.0/dist/mermaid.min.js"></script>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -293,44 +293,68 @@
                 
                 // 1. AUTO-KORREKTUR: Entfernt Kommentare
                 graphDefinition = graphDefinition.replace(/%\{[\s\S]*?\}%/g, '');
-                
-                // 2. AUTO-KORREKTUR: Wandelt ausgeschriebene Richtungen (right, left, top, bottom) in (R, L, T, B) um
-                // Deckt Quelle ab (z.B. node:right)
-                graphDefinition = graphDefinition.replace(/:right\b/gi, ':R')
-                                                 .replace(/:left\b/gi, ':L')
-                                                 .replace(/:top\b/gi, ':T')
-                                                 .replace(/:bottom\b/gi, ':B');
-                // Deckt Ziel ab (z.B. right:node)
-                graphDefinition = graphDefinition.replace(/\bright:/gi, 'R:')
-                                                 .replace(/\bleft:/gi, 'L:')
-                                                 .replace(/\btop:/gi, 'T:')
-                                                 .replace(/\bbottom:/gi, 'B:');
-                
-                // 3. AUTO-KORREKTUR: Wandelt einfache in doppelte Pfeile um (außer <->)
-                graphDefinition = graphDefinition.replace(/([a-zA-Z0-9_]+(?::[a-zA-Z]+)?)\s*->\s*([a-zA-Z0-9_]+(?::[a-zA-Z]+)?)/g, "$1 --> $2");
-                graphDefinition = graphDefinition.replace(/([a-zA-Z0-9_]+(?::[a-zA-Z]+)?)\s*<->\s*([a-zA-Z0-9_]+(?::[a-zA-Z]+)?)/g, "$1 <--> $2");
 
-                // 4. AUTO-KORREKTUR & PRE-PROCESSOR: 
-                // Sucht "group/service ID(icon) in Parent [Label]" UND sortiert es um zu "ID(icon)[SFTXT] in Parent"
-                const declRegex = /(group|service)\s+([a-zA-Z0-9_-]+)(?:\(([^)]+)\))?(?:\s+in\s+([a-zA-Z0-9_-]+))?\s*\[([^\]]+)\](?:\s+in\s+([a-zA-Z0-9_-]+))?/g;
+                // 2. AUTO-KORREKTUR: Smart-Routing für alle Pfeile!
+                graphDefinition = graphDefinition.replace(/([a-zA-Z0-9_-]+)(?::([a-zA-Z]+))?\s*(<*-+*>)\s*(?:([a-zA-Z]+):)?([a-zA-Z0-9_-]+)/g, (match, id1, dir1, arrow, dir2, id2) => {
+                    const mapDir = (d) => {
+                        if (!d) return null;
+                        d = d.toUpperCase();
+                        if (d.startsWith('R')) return 'R';
+                        if (d.startsWith('L')) return 'L';
+                        if (d.startsWith('T')) return 'T';
+                        if (d.startsWith('B')) return 'B';
+                        return d;
+                    };
+                    
+                    let d1 = mapDir(dir1);
+                    let d2 = mapDir(dir2);
+
+                    if (!d1 && !d2) {
+                        d1 = 'B'; d2 = 'T';
+                    } else if (d1 && !d2) {
+                        if (d1 === 'R') d2 = 'L';
+                        else if (d1 === 'L') d2 = 'R';
+                        else if (d1 === 'T') d2 = 'B';
+                        else if (d1 === 'B') d2 = 'T';
+                    } else if (!d1 && d2) {
+                        if (d2 === 'R') d1 = 'L';
+                        else if (d2 === 'L') d1 = 'R';
+                        else if (d2 === 'T') d1 = 'B';
+                        else if (d2 === 'B') d1 = 'T';
+                    }
+
+                    let safeArrow = arrow;
+                    if (safeArrow === '->') safeArrow = '-->';
+                    if (safeArrow === '<->') safeArrow = '<-->';
+                    if (safeArrow === '-') safeArrow = '--';
+
+                    return `${id1}:${d1} ${safeArrow} ${d2}:${id2}`;
+                });
+
+                // 3. AUTO-KORREKTUR & PRE-PROCESSOR
+                const declRegex = /(group|service|junction)\s+([a-zA-Z0-9_-]+)(?:\(([^)]+)\))?(?:\s+in\s+([a-zA-Z0-9_-]+))?\s*(?:\[([^\]]+)\])?(?:\s+in\s+([a-zA-Z0-9_-]+))?/g;
                 
                 graphDefinition = graphDefinition.replace(declRegex, (match, type, id, icon, parent1, innerText, parent2) => {
                     let parent = parent1 || parent2;
-                    let cleanText = innerText.replace(/^"|"$/g, '');
-                    const lines = cleanText.split(/\\n|\n|<br\s*\/?>/i);
-                    let maxLen = Math.max(...lines.map(l => l.length));
-                    
-                    let placeholder = `SFTXT${counter}SF`;
-                    if (placeholder.length < maxLen) {
-                        placeholder = placeholder.padEnd(maxLen, 'x'); 
-                    }
-                    
-                    replacements[placeholder] = lines;
-                    counter++;
-                    
                     let result = `${type} ${id}`;
                     if (icon) result += `(${icon})`;
-                    result += `[${placeholder}]`;
+                    
+                    if (innerText) {
+                        let cleanText = innerText.replace(/^"|"$/g, '');
+                        const lines = cleanText.split(/\\n|\n|<br\s*\/?>/i);
+                        let maxLen = Math.max(...lines.map(l => l.length));
+                        
+                        let placeholder = `SFTXT${counter}SF`;
+                        if (placeholder.length < maxLen) {
+                            placeholder = placeholder.padEnd(maxLen, 'x'); 
+                        }
+                        
+                        replacements[placeholder] = lines;
+                        counter++;
+                        
+                        result += `[${placeholder}]`;
+                    }
+                    
                     if (parent) result += ` in ${parent}`;
                     
                     return result;
