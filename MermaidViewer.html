@@ -295,7 +295,8 @@
                 graphDefinition = graphDefinition.replace(/%\{[\s\S]*?\}%/g, '');
 
                 // 2. AUTO-KORREKTUR: Smart-Routing für alle Pfeile!
-                graphDefinition = graphDefinition.replace(/([a-zA-Z0-9_-]+)(?::([a-zA-Z]+))?\s*(<*-+*>)\s*(?:([a-zA-Z]+):)?([a-zA-Z0-9_-]+)/g, (match, id1, dir1, arrow, dir2, id2) => {
+                // Gefixter Regex: <?-+>? anstelle von <*-+*> verhindert den Syntax Error
+                graphDefinition = graphDefinition.replace(/([a-zA-Z0-9_-]+)(?::([a-zA-Z]+))?\s*(<?-+>?)\s*(?:([a-zA-Z]+):)?([a-zA-Z0-9_-]+)/g, (match, id1, dir1, arrow, dir2, id2) => {
                     const mapDir = (d) => {
                         if (!d) return null;
                         d = d.toUpperCase();
