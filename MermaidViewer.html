@@ -11,13 +11,12 @@
             margin: 0;
             padding: 20px;
             display: flex;
-            flex-direction: row; /* Standard: Links/Rechts */
+            flex-direction: row;
             height: 100vh;
             box-sizing: border-box;
             background-color: #f4f4f9;
         }
         
-        /* Layout-Klasse für "Code Oben / Diagramm Unten" */
         body.layout-vertical {
             flex-direction: column;
         }
@@ -40,15 +39,14 @@
             display: flex;
             flex-direction: column;
             min-width: 0;
-            min-height: 0; /* Wichtig für vertikales Layout */
+            min-height: 0;
         }
 
-        /* Der verbesserte, sichtbare Schieber */
         .resizer {
             width: 14px;
             height: 100%;
             margin: 0 10px;
-            background-color: #d1d5db; /* Deutlicher sichtbar */
+            background-color: #d1d5db;
             border-radius: 4px;
             cursor: col-resize;
             display: flex;
@@ -64,7 +62,6 @@
             font-size: 20px;
         }
         
-        /* Anpassungen des Schiebers für vertikales Layout */
         body.layout-vertical .resizer {
             width: 100%;
             height: 14px;
@@ -223,7 +220,6 @@
 
         function toggleLayout() {
             document.body.classList.toggle('layout-vertical');
-            // Panel auf 40% zurücksetzen bei Wechsel
             if (document.body.classList.contains('layout-vertical')) {
                 leftPanel.style.width = '100%';
                 leftPanel.style.height = '40%';
@@ -295,19 +291,31 @@
             if (isArchitecture) {
                 let counter = 0;
                 
-                // 1. AUTO-KORREKTUR: Entfernt Kommentare, die den Parser verwirren
+                // 1. AUTO-KORREKTUR: Entfernt Kommentare
                 graphDefinition = graphDefinition.replace(/%\{[\s\S]*?\}%/g, '');
                 
-                // 2. AUTO-KORREKTUR: Wandelt einfache in doppelte Pfeile um (außer <->)
-                graphDefinition = graphDefinition.replace(/([a-zA-Z0-9_]+(?::[a-zA-Z]+)?)\s*->\s*([a-zA-Z0-9_]+)/g, "$1 --> $2");
-                graphDefinition = graphDefinition.replace(/([a-zA-Z0-9_]+(?::[a-zA-Z]+)?)\s*<->\s*([a-zA-Z0-9_]+)/g, "$1 <--> $2");
+                // 2. AUTO-KORREKTUR: Wandelt ausgeschriebene Richtungen (right, left, top, bottom) in (R, L, T, B) um
+                // Deckt Quelle ab (z.B. node:right)
+                graphDefinition = graphDefinition.replace(/:right\b/gi, ':R')
+                                                 .replace(/:left\b/gi, ':L')
+                                                 .replace(/:top\b/gi, ':T')
+                                                 .replace(/:bottom\b/gi, ':B');
+                // Deckt Ziel ab (z.B. right:node)
+                graphDefinition = graphDefinition.replace(/\bright:/gi, 'R:')
+                                                 .replace(/\bleft:/gi, 'L:')
+                                                 .replace(/\btop:/gi, 'T:')
+                                                 .replace(/\bbottom:/gi, 'B:');
+                
+                // 3. AUTO-KORREKTUR: Wandelt einfache in doppelte Pfeile um (außer <->)
+                graphDefinition = graphDefinition.replace(/([a-zA-Z0-9_]+(?::[a-zA-Z]+)?)\s*->\s*([a-zA-Z0-9_]+(?::[a-zA-Z]+)?)/g, "$1 --> $2");
+                graphDefinition = graphDefinition.replace(/([a-zA-Z0-9_]+(?::[a-zA-Z]+)?)\s*<->\s*([a-zA-Z0-9_]+(?::[a-zA-Z]+)?)/g, "$1 <--> $2");
 
-                // 3. AUTO-KORREKTUR & PRE-PROCESSOR: 
+                // 4. AUTO-KORREKTUR & PRE-PROCESSOR: 
                 // Sucht "group/service ID(icon) in Parent [Label]" UND sortiert es um zu "ID(icon)[SFTXT] in Parent"
                 const declRegex = /(group|service)\s+([a-zA-Z0-9_-]+)(?:\(([^)]+)\))?(?:\s+in\s+([a-zA-Z0-9_-]+))?\s*\[([^\]]+)\](?:\s+in\s+([a-zA-Z0-9_-]+))?/g;
                 
                 graphDefinition = graphDefinition.replace(declRegex, (match, type, id, icon, parent1, innerText, parent2) => {
-                    let parent = parent1 || parent2; // Akzeptiert 'in parent' davor oder danach
+                    let parent = parent1 || parent2;
                     let cleanText = innerText.replace(/^"|"$/g, '');
                     const lines = cleanText.split(/\\n|\n|<br\s*\/?>/i);
                     let maxLen = Math.max(...lines.map(l => l.length));
@@ -320,7 +328,6 @@
                     replacements[placeholder] = lines;
                     counter++;
                     
-                    // Zwingt das Format in die exakte Reihenfolge, die Mermaid erwartet!
                     let result = `${type} ${id}`;
                     if (icon) result += `(${icon})`;
                     result += `[${placeholder}]`;
@@ -367,7 +374,6 @@
                                     textEl.appendChild(tspan);
                                 });
 
-                                // Hält den Text sauber zentriert unter dem Icon
                                 let currentTransform = textEl.getAttribute('transform') || '';
                                 textEl.setAttribute('transform', currentTransform + ' translate(0, 10)');
                             }
@@ -397,7 +403,7 @@
             renderTimeout = setTimeout(renderDiagram, 500);
         });
 
-        // --- Zoom & Export (wie gehabt) ---
+        // --- Zoom & Export ---
         function changeZoom(step) {
             currentZoom += step;
             if (currentZoom < 0.2) currentZoom = 0.2; 
