@@ -286,6 +286,552 @@
             }
 
             let replacements = {};
+            
+            // Falls der User nur "architecture" tippt, wird es sicherheitshalber erweitert.
+            if (/^\s*architecture\b(?!\-beta)/i.test(graphDefinition)) {
+                graphDefinition = graphDefinition.replace(/^\s*architecture\b/i, 'architecture-beta');
+            }
+
+            let isArchitecture = graphDefinition.startsWith('architecture-beta');
+
+            if (isArchitecture) {
+                let counter = 0;
+                
+                // 1. AUTO-KORREKTUR: Entfernt Kommentare
+                graphDefinition = graphDefinition.replace(/%\{[\s\S]*?\}%/g, '');
+
+                // 2. AUTO-KORREKTUR: Entfernt das unzulässige "in parent" bei Junctions
+                graphDefinition = graphDefinition.replace(/junction\s+([a-zA-Z0-9_-]+)\s+in\s+[a-zA-Z0-9_-]+/g, "junction $1");
+
+                // 3. AUTO-KORREKTUR: Smart-Routing für alle Pfeile!
+                // Die Regex reagiert jetzt NUR noch auf explizite Pfeile (->, -->, <->, --) und zerstückelt keine Bindestriche in Wörtern.
+                graphDefinition = graphDefinition.replace(/([a-zA-Z0-9_-]+)(?::([a-zA-Z]+))?\s*(<->|<--+>|<-+|-+>|--+)\s*(?:([a-zA-Z]+):)?([a-zA-Z0-9_-]+)/g, (match, id1, dir1, arrow, dir2, id2) => {
+                    const mapDir = (d) => {
+                        if (!d) return null;
+                        d = d.toUpperCase();
+                        if (d.startsWith('R')) return 'R';
+                        if (d.startsWith('L')) return 'L';
+                        if (d.startsWith('T')) return 'T';
+                        if (d.startsWith('B')) return 'B';
+                        return d;
+                    };
+                    
+                    let d1 = mapDir(dir1);
+                    let d2 = mapDir(dir2);
+
+                    if (!d1 && !d2) {
+                        d1 = 'B'; d2 = 'T';
+                    } else if (d1 && !d2) {
+                        if (d1 === 'R') d2 = 'L';
+                        else if (d1 === 'L') d2 = 'R';
+                        else if (d1 === 'T') d2 = 'B';
+                        else if (d1 === 'B') d2 = 'T';
+                    } else if (!d1 && d2) {
+                        if (d2 === 'R') d1 = 'L';
+                        else if (d2 === 'L') d1 = 'R';
+                        else if (d2 === 'T') d1 = 'B';
+                        else if (d2 === 'B') d1 = 'T';
+                    }
+
+                    let safeArrow = arrow;
+                    if (safeArrow === '->') safeArrow = '-->';
+                    if (safeArrow === '<->') safeArrow = '<-->';
+                    if (safeArrow === '<-') safeArrow = '<--';
+
+                    return `${id1}:${d1} ${safeArrow} ${d2}:${id2}`;
+                });
+
+                // 4. AUTO-KORREKTUR & PRE-PROCESSOR: Beschriftungen in saubere Platzhalter umwandeln
+                const declRegex = /(group|service)\s+([a-zA-Z0-9_-]+)(?:\(([^)]+)\))?(?:\s+in\s+([a-zA-Z0-9_-]+))?\s*(?:\[([^\]]+)\])?(?:\s+in\s+([a-zA-Z0-9_-]+))?/g;
+                
+                graphDefinition = graphDefinition.replace(declRegex, (match, type, id, icon, parent1, innerText, parent2) => {
+                    let parent = parent1 || parent2;
+                    let result = `${type} ${id}`;
+                    if (icon) result += `(${icon})`;
+                    
+                    if (innerText) {
+                        let cleanText = innerText.replace(/^"|"$/g, '');
+                        const lines = cleanText.split(/\\n|\n|<br\s*\/?>/i);
+                        let maxLen = Math.max(...lines.map(l => l.length));
+                        
+                        let placeholder = `SFTXT${counter}SF`;
+                        if (placeholder.length < maxLen) {
+                            placeholder = placeholder.padEnd(maxLen, 'x'); 
+                        }
+                        
+                        replacements[placeholder] = lines;
+                        counter++;
+                        
+                        result += `[${placeholder}]`;
+                    }
+                    
+                    if (parent) result += ` in ${parent}`;
+                    
+                    return result;
+                });
+            }
+
+            try {
+                const id = 'mermaid-svg-' + Date.now();
+                let { svg } = await mermaid.render(id, graphDefinition);
+                
+                if (isArchitecture) {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(svg, "image/svg+xml");
+                    
+                    const textElements = doc.querySelectorAll('text');
+                    
+                    textElements.forEach(textEl => {
+                        let content = textEl.textContent || '';
+                        
+                        for (const [placeholder, lines] of Object.entries(replacements)) {
+                            if (content.includes(placeholder)) {
+                                let originalTspan = textEl.querySelector('tspan');
+                                let x = textEl.getAttribute('x') || (originalTspan ? originalTspan.getAttribute('x') : '0');
+                                let y = textEl.getAttribute('y') || (originalTspan ? originalTspan.getAttribute('y') : null);
+                                let dy = textEl.getAttribute('dy') || (originalTspan ? originalTspan.getAttribute('dy') : null);
+                                
+                                textEl.innerHTML = '';
+                                
+                                lines.forEach((line, index) => {
+                                    const tspan = doc.createElementNS("http://www.w3.org/2000/svg", "tspan");
+                                    tspan.textContent = line.trim();
+                                    tspan.setAttribute('x', x);
+                                    
+                                    if (index === 0) {
+                                        if (y !== null) tspan.setAttribute('y', y);
+                                        if (dy !== null) tspan.setAttribute('dy', dy);
+                                    } else {
+                                        tspan.setAttribute('dy', '1.2em'); 
+                                    }
+                                    
+                                    textEl.appendChild(tspan);
+                                });
+
+                                let currentTransform = textEl.getAttribute('transform') || '';
+                                textEl.setAttribute('transform', currentTransform + ' translate(0, 10)');
+                            }
+                        }
+                    });
+                    
+                    const serializer = new XMLSerializer();
+                    svg = serializer.serializeToString(doc);
+                }
+
+                outputElement.innerHTML = svg;
+                errorElement.className = 'error';
+                errorElement.textContent = ''; 
+                
+                prepareSvgForZoom();
+                applyZoom();
+            } catch (error) {
+                errorElement.className = 'error';
+                errorElement.textContent = "Fehler im Mermaid-Syntax:\n" + error.message;
+            }
+        }
+
+        renderDiagram();
+
+        inputElement.addEventListener('input', () => {
+            clearTimeout(renderTimeout);
+            renderTimeout = setTimeout(renderDiagram, 500);
+        });
+
+        // --- Zoom & Export ---
+        function changeZoom(step) {
+            currentZoom += step;
+            if (currentZoom < 0.2) currentZoom = 0.2; 
+            applyZoom();
+        }
+
+        function resetZoom() {
+            currentZoom = 1;
+            applyZoom();
+        }
+
+        function applyZoom() {
+            zoomContainer.style.zoom = currentZoom;
+            if (navigator.userAgent.toLowerCase().includes('firefox')) {
+                zoomContainer.style.transform = `scale(${currentZoom})`;
+                zoomContainer.style.transformOrigin = '0 0';
+            }
+        }
+
+        function exportImage(format) {
+            const svgElement = outputElement.querySelector('svg');
+            if (!svgElement) {
+                alert('Es gibt aktuell kein gültiges Diagramm zum Speichern.');
+                return;
+            }
+
+            const tempZoom = currentZoom;
+            resetZoom();
+
+            const serializer = new XMLSerializer();
+            let svgString = serializer.serializeToString(svgElement);
+            
+            if (!svgString.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
+                svgString = svgString.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+
+            const rect = svgElement.getBoundingClientRect();
+            currentZoom = tempZoom;
+            applyZoom();
+
+            const extension = format === 'jpeg' ? 'jpg' : format;
+            const fileName = `Architektur-Diagramm.${extension}`;
+            
+            if (format === 'svg') {
+                const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+                triggerSaveDialog(svgBlob, fileName, 'image/svg+xml', extension);
+                return;
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = rect.width * 2;
+            canvas.height = rect.height * 2;
+            const ctx = canvas.getContext('2d');
+            ctx.scale(2, 2);
+
+            ctx.fillStyle = "white";
+            ctx.fillRect(0, 0, rect.width, rect.height);
+
+            const img = new Image();
+            const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+            const url = URL.createObjectURL(svgBlob);
+
+            img.onload = function () {
+                ctx.drawImage(img, 0, 0, rect.width, rect.height);
+                URL.revokeObjectURL(url); 
+
+                const mimeType = `image/${format}`;
+                canvas.toBlob((blob) => {
+                    triggerSaveDialog(blob, fileName, mimeType, extension);
+                }, mimeType, 1.0);
+            };
+            
+            img.src = url;
+        }
+
+        async function triggerSaveDialog(blob, fileName, mimeType, extension) {
+            if (window.showSaveFilePicker) {
+                try {
+                    const fileHandle = await window.showSaveFilePicker({
+                        suggestedName: fileName,
+                        types: [{ description: 'Diagramm Datei', accept: { [mimeType]: [`.${extension}`] } }],
+                    });
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                } catch (err) {
+                    if (err.name !== 'AbortError') triggerClassicDownload(blob, fileName);
+                }
+            } else {
+                triggerClassicDownload(blob, fileName);
+            }
+        }
+
+        function triggerClassicDownload(blob, fileName) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            alert("Dein Browser lässt den 'Speichern unter'-Dialog nicht zu.\n\nDie Datei wurde stattdessen in Deinen Standard-Downloadordner heruntergeladen.");
+        }
+    </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lokaler Mermaid Viewer (v11.16.0)</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.0/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: row;
+            height: 100vh;
+            box-sizing: border-box;
+            background-color: #f4f4f9;
+        }
+        
+        body.layout-vertical {
+            flex-direction: column;
+        }
+
+        .editor-container {
+            width: 40%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+        
+        body.layout-vertical .editor-container {
+            width: 100%;
+            height: 40%;
+        }
+
+        .viewer-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+        }
+
+        .resizer {
+            width: 14px;
+            height: 100%;
+            margin: 0 10px;
+            background-color: #d1d5db;
+            border-radius: 4px;
+            cursor: col-resize;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: inset 0 0 5px rgba(0,0,0,0.1);
+            transition: background-color 0.2s ease;
+            user-select: none;
+        }
+        .resizer::after {
+            content: "⋮";
+            color: #4b5563;
+            font-size: 20px;
+        }
+        
+        body.layout-vertical .resizer {
+            width: 100%;
+            height: 14px;
+            margin: 10px 0;
+            cursor: row-resize;
+        }
+        body.layout-vertical .resizer::after {
+            content: "⋯";
+        }
+
+        .resizer:hover, .resizer:active { background-color: #0078d7; }
+        .resizer:hover::after, .resizer:active::after { color: white; }
+
+        .toolbar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            background: #fff;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            flex-wrap: wrap;
+        }
+        .toolbar button {
+            padding: 6px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            border: 1px solid #0078d7;
+            background-color: white;
+            color: #0078d7;
+            border-radius: 3px;
+            transition: all 0.2s ease;
+        }
+        .toolbar button:hover {
+            background-color: #0078d7;
+            color: white;
+        }
+        .toolbar .divider {
+            border-left: 1px solid #ccc;
+            margin: 0 5px;
+        }
+
+        .viewer-container {
+            flex: 1;
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 20px;
+            overflow: auto;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        #zoomContainer {
+            display: inline-block;
+            text-align: left;
+        }
+
+        textarea {
+            flex: 1;
+            width: 100%;
+            padding: 15px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            resize: none;
+            box-sizing: border-box;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+            white-space: pre;
+        }
+        h2 { margin-top: 0; font-size: 1.2rem; color: #333; }
+        
+        .error {
+            color: #d9534f;
+            font-family: 'Consolas', monospace;
+            font-size: 0.9em;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            min-height: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="editor-container" id="editorPanel">
+        <h2>Mermaid Code</h2>
+        <textarea id="mermaidInput">architecture-beta
+    group cluster(cloud)[OpenShift Cluster]
+    
+    group zone_rot(cloud) in cluster [Netzwerk-Zone Rot / DMZ]
+    service presidio(server) in zone_rot [Microsoft Presidio (Anonymizer/Analyzer)]
+    service redis(database) in zone_rot [Redis HA Cache]
+    service litellm(router) in zone_rot [LiteLLM Gateway / Router]
+    service egress_gw(net) in zone_rot [Egress Gateway / Proxy]
+
+    group zone_intern(cloud) in cluster [Interne Zone / Core AI App]
+    service n8n(server) in zone_intern [n8n Workflow Engine]
+    service vector_db(database) in zone_intern [Vector DB (e.g., Qdrant / Milvus)]
+    service apps(app) in zone_intern [Chatbots / AI Agents Namespaces]
+    service secrets_mgr(key) in zone_intern [Vault / K8s Secrets]
+
+    group external(cloud)[Externer KI-Betreiber]
+    service gpu_aas(server) in external [GPU-as-a-Service (Fine-Tuning/Training)]
+    service inf_aas(server) in external [Inference-as-a-Service (LLM APIs)]
+
+    junction j_dmz in zone_rot
+    junction j_intern in zone_intern
+
+    %{ Junction-Verbindungen für sauberes Routing }%
+    apps:right -> j_intern
+    n8n:right -> j_intern
+    j_intern -> litellm
+    
+    litellm:top -> presidio
+    presidio:left -> redis
+    
+    litellm:right -> egress_gw
+    egress_gw:right -> inf_aas
+    egress_gw:top -> gpu_aas
+
+    secrets_mgr:top -> apps
+    secrets_mgr:top -> n8n
+    secrets_mgr:top -> litellm
+</textarea>
+        <div id="errorLog" class="error"></div>
+    </div>
+
+    <div class="resizer" id="dragMe" title="Größe anpassen"></div>
+
+    <div class="viewer-wrapper">
+        <div class="toolbar">
+            <button onclick="toggleLayout()">Ansicht wechseln</button>
+            <div class="divider"></div>
+            <button onclick="changeZoom(0.2)">Zoom +</button>
+            <button onclick="changeZoom(-0.2)">Zoom -</button>
+            <button onclick="resetZoom()">Reset Zoom</button>
+            <div class="divider"></div>
+            <button onclick="exportImage('svg')">Als SVG</button>
+            <button onclick="exportImage('png')">Als PNG</button>
+            <button onclick="exportImage('jpeg')">Als JPG</button>
+        </div>
+        
+        <div class="viewer-container">
+            <div id="zoomContainer">
+                <div id="mermaidOutput"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Layout & Splitter ---
+        const resizer = document.getElementById('dragMe');
+        const leftPanel = document.getElementById('editorPanel');
+        let isResizing = false;
+
+        function toggleLayout() {
+            document.body.classList.toggle('layout-vertical');
+            if (document.body.classList.contains('layout-vertical')) {
+                leftPanel.style.width = '100%';
+                leftPanel.style.height = '40%';
+            } else {
+                leftPanel.style.height = '100%';
+                leftPanel.style.width = '40%';
+            }
+        }
+
+        resizer.addEventListener('mousedown', function(e) {
+            isResizing = true;
+            document.body.style.cursor = document.body.classList.contains('layout-vertical') ? 'row-resize' : 'col-resize';
+            e.preventDefault(); 
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!isResizing) return;
+            
+            if (document.body.classList.contains('layout-vertical')) {
+                let newHeight = (e.clientY / window.innerHeight) * 100;
+                if (newHeight < 15) newHeight = 15;
+                if (newHeight > 85) newHeight = 85;
+                leftPanel.style.height = newHeight + '%';
+            } else {
+                let newWidth = (e.clientX / window.innerWidth) * 100;
+                if (newWidth < 15) newWidth = 15;
+                if (newWidth > 85) newWidth = 85;
+                leftPanel.style.width = newWidth + '%';
+            }
+        });
+
+        document.addEventListener('mouseup', function(e) {
+            if (isResizing) {
+                isResizing = false;
+                document.body.style.cursor = 'default';
+            }
+        });
+
+        // --- Mermaid ---
+        mermaid.initialize({ startOnLoad: false, theme: 'default' });
+
+        const inputElement = document.getElementById('mermaidInput');
+        const outputElement = document.getElementById('mermaidOutput');
+        const errorElement = document.getElementById('errorLog');
+        const zoomContainer = document.getElementById('zoomContainer');
+
+        let renderTimeout;
+        let currentZoom = 1;
+
+        function prepareSvgForZoom() {
+            const svgNode = outputElement.querySelector('svg');
+            if (svgNode) {
+                svgNode.style.maxWidth = 'none';
+            }
+        }
+
+        async function renderDiagram() {
+            let graphDefinition = inputElement.value.trim();
+            if (!graphDefinition) {
+                outputElement.innerHTML = '';
+                errorElement.className = 'error';
+                errorElement.textContent = '';
+                return;
+            }
+
+            let replacements = {};
             let isArchitecture = graphDefinition.startsWith('architecture-beta');
 
             if (isArchitecture) {
